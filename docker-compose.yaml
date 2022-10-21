@@ -1,0 +1,84 @@
+version: "3.9"
+services:
+
+  # Honeypot service that logs login attempts and saves
+  # the login credentials into the database.
+  # Traces will be exported to the otel-collector service.
+  honeypot:
+    build: .
+    init: true
+    read_only: true
+    cap_drop: ['ALL']
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 50M
+        reservations:
+          cpus: '0.25'
+          memory: 20M
+    environment:
+      RUST_LOG: info
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      DB_HOST: db
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      EXTERNAL_PORT: 222
+    volumes:
+      - ./id_ed25519:/id_ed25519:ro
+      - ./id_rsa:/id_rsa:ro
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - 222:2222
+    networks:
+      - otel-collector
+      - internal-network
+
+  # Backend database for the honeypot service
+  db:
+    image: postgres:13-alpine
+    volumes:
+      - db-data:/data/postgres
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      PGDATA: /data/postgres
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    networks:
+      internal-network:
+        aliases:
+          - db
+
+  # ======= Infrastructure for logs and traceing starts here =======
+  otel-collector:
+    image: otel/opentelemetry-collector
+    networks:
+      jaeger:
+      otel-collector:
+        aliases:
+          - otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+
+  # Jaeger is used in the deployment to visualize and store the traces
+  # from the otel-collector, but any other service can be used for it
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    environment:
+      COLLECTOR_OTLP_ENABLED: true
+    ports:
+      - "127.0.0.1:16686:16686"
+    networks:
+      jaeger:
+        aliases:
+          - jaeger
+
+volumes:
+  db-data:
+
+networks:
+  internal-network:
+  otel-collector:
+  jaeger:
